@@ -1,6 +1,6 @@
 # Reservas que não se concretizam: MVP de pipeline de dados em nuvem para apoio à decisão sobre cancelamentos na hotelaria
 
-**Autor:** Diogo Lopes de Macêdo
+**Autor:** Diogo Lopes de Macêdo (202024508)
 **Disciplina:** Sistemas de Suporte à Decisão — Departamento de Engenharia de Produção, Universidade de Brasília (UnB)
 **Professor:** André Luiz Marques Serrano
 **Plataforma:** Databricks Free Edition (Serverless, Unity Catalog, Delta Lake)
