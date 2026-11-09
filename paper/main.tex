@@ -1,0 +1,343 @@
+% =====================================================================
+%  Short paper -- MVP de Sistemas de Suporte à Decisão (SSD)
+%  Departamento de Engenharia de Produção -- UnB
+%  Compilador no Overleaf: pdfLaTeX (padrão). Arquivo único (referências embutidas).
+% =====================================================================
+\documentclass[11pt,a4paper]{article}
+
+% ---------- Idioma e codificação ----------
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[brazilian]{babel}
+\usepackage{mathptmx}            % fonte Times
+\usepackage{microtype}
+
+% ---------- Página ----------
+\usepackage[a4paper,top=2.5cm,bottom=2.5cm,left=2.5cm,right=2.5cm]{geometry}
+\usepackage{setspace}
+\singlespacing
+\setlength{\parskip}{2pt}
+
+% ---------- Tabelas, figuras, cores ----------
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{graphicx}
+\usepackage[table]{xcolor}
+\usepackage{caption}
+\captionsetup{font=small,labelfont=bf,labelsep=endash}
+\setlength{\textfloatsep}{8pt plus 2pt minus 2pt}
+\setlength{\intextsep}{8pt plus 2pt minus 2pt}
+\setlength{\floatsep}{8pt plus 2pt minus 2pt}
+\usepackage{enumitem}
+\setlist{nosep,leftmargin=*}
+\usepackage{tikz}
+\usetikzlibrary{positioning,arrows.meta,shapes.multipart,fit}
+
+% ---------- Seções compactas ----------
+\usepackage{titlesec}
+\titleformat{\section}{\normalfont\large\bfseries}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\normalfont\normalsize\bfseries}{\thesubsection}{0.6em}{}
+\titlespacing*{\section}{0pt}{8pt}{3pt}
+\titlespacing*{\subsection}{0pt}{5pt}{2pt}
+
+% ---------- Referências ----------
+\usepackage[round,authoryear]{natbib}
+\usepackage[hidelinks]{hyperref}
+\usepackage{url}
+
+% ---------------------------------------------------------------------
+%  RESULTADOS PENDENTES
+%  Valores marcados com \res{...} devem ser substituídos pelos números
+%  obtidos nas consultas da camada Gold (notebook 04_analise).
+%  Depois de preencher tudo, troque a definição pela linha comentada
+%  para remover o destaque amarelo.
+% ---------------------------------------------------------------------
+% \newcommand{\res}[1]{\colorbox{yellow!45}{\textbf{#1}}}
+\newcommand{\res}[1]{#1}
+
+\newcommand{\Q}[1]{\textbf{Q#1}}
+
+% =====================================================================
+\title{\vspace{-1.6cm}\textbf{Reservas que não se concretizam: um MVP de pipeline de dados\\
+em nuvem para apoio à decisão sobre cancelamentos na hotelaria}}
+\author{%
+  \textbf{Diogo}\\
+  \small Departamento de Engenharia de Produção -- Universidade de Brasília (UnB)\\
+  \small Disciplina: Sistemas de Suporte à Decisão -- Prof. André Luiz Marques Serrano\\
+  \small Repositório: \url{https://github.com/lopesmdiogo-1111/mvp-ssd-hotel-cancelamentos}}
+\date{\vspace{-0.8cm}}
+
+\begin{document}
+\maketitle
+
+% =====================================================================
+\begin{abstract}
+\noindent
+Cancelamentos de reservas são uma das principais fontes de incerteza na gestão de capacidade hoteleira: cada quarto cancelado próximo à data de chegada tende a se tornar capacidade perecível não vendida. Este trabalho desenvolve um \textit{Minimum Viable Product} (MVP) de Sistema de Suporte à Decisão (SSD) que testa a hipótese de que o risco de cancelamento é previsível a partir de atributos conhecidos no momento da reserva -- antecedência, canal de venda, política de depósito e histórico do cliente -- e de que esse conhecimento permite calibrar políticas de \textit{overbooking} e de depósito por segmento. Utilizou-se o conjunto \textit{Hotel Booking Demand}, disponível no Kaggle, com 119.390 reservas de dois hotéis portugueses entre 2015 e 2017. O pipeline foi construído na plataforma Databricks segundo a arquitetura \textit{medallion} (Bronze, Silver e Gold), com tabelas Delta, modelo dimensional em esquema estrela, catálogo de dados e análise de qualidade por atributo. Os resultados indicam taxa de cancelamento de 41,8\% no hotel urbano e 27,8\% no resort, crescente com a antecedência da reserva (de 9,6\% a 57,0\%), e receita potencial associada a cancelamentos de 16,7 milhões de euros no período. Conclui-se que o MVP valida tecnicamente o pipeline e fornece base quantitativa para políticas diferenciadas por segmento, com custo de operação nulo no nível gratuito da plataforma.
+
+\vspace{4pt}
+\noindent\textbf{Palavras-chave:} Sistemas de Suporte à Decisão; Gestão de Receitas; Cancelamento de Reservas; Lakehouse; Esquema Estrela.
+\end{abstract}
+
+% =====================================================================
+\section{Introdução}
+
+Hotéis operam com capacidade fixa e produto perecível: uma diária não vendida não pode ser estocada. Nesse contexto, a reserva funciona como um compromisso de demanda futura sobre o qual o hotel planeja tarifas, alocação de quartos e mão de obra. Quando uma fração relevante dessas reservas é cancelada -- muitas vezes perto da data de chegada --, a capacidade previamente bloqueada retorna ao estoque tarde demais para ser revendida, gerando perda de receita e erro de planejamento.
+
+Para a Engenharia de Produção, trata-se de um problema clássico de gestão de capacidade sob incerteza de demanda. As respostas gerenciais usuais -- aceitar mais reservas do que a capacidade (\textit{overbooking}) e exigir depósito não reembolsável -- dependem de uma estimativa confiável de quais reservas tendem a ser canceladas. Um Sistema de Suporte à Decisão (SSD) que organize o histórico de reservas permite substituir regras uniformes por políticas diferenciadas por segmento.
+
+Seguindo a lógica de experimentação enxuta de \citet{ries2011}, este trabalho constrói o menor artefato capaz de gerar aprendizado validado sobre a seguinte \textbf{hipótese}: \textit{o risco de cancelamento varia de forma sistemática com atributos conhecidos no momento da reserva, de modo que um pipeline de dados em nuvem pode subsidiar políticas de overbooking e de depósito por segmento}. O \textbf{objetivo} é desenvolver um pipeline em nuvem, da coleta à análise, que responda às seguintes perguntas de negócio:
+
+\begin{itemize}
+  \item[\Q{1}] Qual a taxa de cancelamento de cada hotel e como ela varia ao longo dos meses de chegada?
+  \item[\Q{2}] Como a probabilidade de cancelamento varia com a antecedência da reserva (\textit{lead time})?
+  \item[\Q{3}] Quais combinações de segmento de mercado e tipo de depósito concentram as maiores taxas de cancelamento?
+  \item[\Q{4}] Qual a receita potencial associada às reservas canceladas, por hotel e por mês, e qual parcela foi cancelada com menos de sete dias de antecedência da chegada?
+  \item[\Q{5}] Clientes recorrentes e clientes com cancelamentos anteriores apresentam comportamento distinto, a ponto de justificar tratamento diferenciado?
+\end{itemize}
+
+As perguntas foram formuladas antes da escolha final da base, conforme a orientação do MVP, e são mantidas íntegras mesmo quando não integralmente respondidas. O texto apresenta a revisão da literatura (Seção~\ref{sec:revisao}), a metodologia (Seção~\ref{sec:metodo}), os resultados e sua discussão (Seção~\ref{sec:resultados}) e as conclusões com a autoavaliação (Seção~\ref{sec:conclusao}).
+
+% =====================================================================
+\section{Revisão da literatura}\label{sec:revisao}
+
+\textbf{Sistemas de Suporte à Decisão.} \citet{sprague1980} estruturou os SSD em três subsistemas -- dados, modelos e diálogo -- e os caracterizou como sistemas voltados a problemas semiestruturados, nos quais o julgamento humano permanece central. \citet{power2002} classificou os SSD conforme o componente dominante, destacando os \textit{data-driven DSS}, cuja utilidade decorre do acesso organizado a grandes volumes de dados históricos. \citet{shim2002} apontaram a convergência dos SSD com o \textit{data warehousing} e o processamento analítico como tendência estrutural do campo.
+
+\textbf{Data Warehouse, Data Lake e Lakehouse.} \citet{inmon2005} definiu o \textit{data warehouse} como coleção de dados orientada a assunto, integrada, não volátil e variante no tempo. \citet{kimball2013} propuseram a modelagem dimensional, em que tabelas fato registram eventos de negócio em um grão declarado e tabelas de dimensão fornecem o contexto de análise. Os \textit{data lakes} passaram a armazenar dados brutos na nuvem a baixo custo, porém sem garantias transacionais; o Delta Lake \citep{armbrust2020} acrescentou transações ACID, versionamento e imposição de esquema sobre arquivos Parquet, e o paradigma \textit{lakehouse} \citep{armbrust2021} propõe unificar o armazenamento do \textit{lake} e a gestão do \textit{warehouse} em uma só plataforma. O processamento é feito pelo Apache Spark \citep{zaharia2016}, motor do Databricks.
+
+\textbf{Qualidade de dados.} \citet{wang1996} mostraram que qualidade de dados é um conceito multidimensional, definido pela adequação ao uso. \citet{batini2006} sistematizaram as dimensões de completude, unicidade, consistência, acurácia e atualidade, que fundamentam a análise por atributo da Seção~\ref{sec:qualidade}.
+
+\textbf{Gestão de receitas e cancelamentos.} \citet{kimes1989} caracterizou o \textit{yield management} como ferramenta para empresas de serviço com capacidade restrita, demanda segmentável e produto perecível -- condições típicas da hotelaria. \citet{talluri2004} formalizaram o \textit{overbooking} como decisão que equilibra o custo de quartos vazios e o custo de recusar hóspedes com reserva, decisão que depende diretamente da distribuição das taxas de cancelamento. \citet{antonio2017} demonstraram que cancelamentos podem ser previstos com boa acurácia a partir de atributos da reserva, e \citet{antonio2019} publicaram os dados utilizados neste trabalho.
+
+% =====================================================================
+\section{Metodologia}\label{sec:metodo}
+
+\subsection{Base de dados, licença e coleta}
+Utilizou-se o conjunto \textit{Hotel Booking Demand} \citep{mostipak2020}, versão no Kaggle dos dados publicados por \citet{antonio2019}. O arquivo único \texttt{hotel\_bookings.csv} contém 119.390 reservas e 32 atributos de dois hotéis em Portugal -- um resort (H1, 40.060 reservas) e um hotel urbano (H2, 79.330 reservas) --, com chegadas previstas entre julho de 2015 e agosto de 2017. A publicação original adota licença CC BY 4.0, que autoriza redistribuição e uso derivado com atribuição. Os dados não contêm identificadores pessoais: hotéis, agentes e empresas aparecem apenas como códigos numéricos e o cliente é descrito por país e tipo, de forma compatível com a LGPD \citep{lgpd2018}. A coleta foi feita por \textit{download} no site do Kaggle em 09/11/2026 (16,1 MB) e o arquivo foi enviado a um \textit{Volume} do Unity Catalog no Databricks. A Tabela~\ref{tab:volume} agrupa os atributos de origem por destino no modelo.
+
+\begin{table}[!htb]
+\centering\small
+\caption{Grupos de atributos do arquivo de origem e destino no modelo dimensional.}\label{tab:volume}
+\begin{tabularx}{\textwidth}{@{}l X l@{}}
+\toprule
+\textbf{Grupo} & \textbf{Atributos de origem (exemplos)} & \textbf{Destino} \\
+\midrule
+Hotel & \texttt{hotel} & \texttt{dim\_hotel} \\
+Datas & \texttt{arrival\_date\_year}, \texttt{\_month}, \texttt{\_day\_of\_month}, \texttt{\_week\_number} & \texttt{dim\_tempo} \\
+Canal & \texttt{market\_segment}, \texttt{distribution\_channel}, \texttt{deposit\_type}, \texttt{agent} & \texttt{dim\_canal} \\
+Cliente & \texttt{country}, \texttt{customer\_type}, \texttt{is\_repeated\_guest}, \texttt{previous\_cancellations} & \texttt{dim\_perfil\_cliente} \\
+Medidas & \texttt{is\_canceled}, \texttt{lead\_time}, \texttt{adr}, noites, hóspedes, \texttt{booking\_changes} & \texttt{fato\_reserva} \\
+Status & \texttt{reservation\_status}, \texttt{reservation\_status\_date} & Validação / \texttt{fato\_reserva} \\
+Excluído & \texttt{company} (majoritariamente nulo) & Não utilizado \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Arquitetura do pipeline}
+O pipeline foi implementado na versão gratuita do Databricks, em notebooks PySpark e SQL orquestrados por um \textit{Job} com três tarefas dependentes, segundo a arquitetura \textit{medallion} (Figura~\ref{fig:pipeline}). Na camada \textbf{Bronze}, o CSV é lido sem alteração semântica e persistido como tabela Delta, acrescida das colunas de linhagem \texttt{\_arquivo\_origem} e \texttt{\_data\_ingestao}. Na \textbf{Silver}, aplicam-se tipagem, padronização, deduplicação e regras de negócio. Na \textbf{Gold}, constrói-se o modelo dimensional consumido pelas análises. Todas as tabelas residem no catálogo \texttt{mvp\_hotel}, garantindo a persistência em nuvem exigida pelo MVP.
+
+\begin{figure}[!htb]
+\centering
+\begin{tikzpicture}[
+  node distance=0.55cm,
+  box/.style={draw, rounded corners=2pt, align=center, minimum height=1.05cm, text width=2.35cm, font=\scriptsize},
+  arr/.style={-{Stealth[length=2mm]}, thick}]
+\node[box, fill=gray!12]   (src) {\textbf{Kaggle}\\CSV único\\(download)};
+\node[box, fill=orange!20, right=of src] (brz) {\textbf{Bronze}\\Delta bruto\\+ linhagem};
+\node[box, fill=gray!25,   right=of brz] (slv) {\textbf{Silver}\\tipagem, limpeza,\\regras de negócio};
+\node[box, fill=yellow!35, right=of slv] (gld) {\textbf{Gold}\\esquema estrela\\(fato + dimensões)};
+\node[box, fill=blue!12,   right=of gld] (ssd) {\textbf{SSD}\\consultas SQL e\\painel analítico};
+\draw[arr] (src) -- (brz); \draw[arr] (brz) -- (slv);
+\draw[arr] (slv) -- (gld); \draw[arr] (gld) -- (ssd);
+\node[draw, dashed, rounded corners, inner sep=5pt, fit=(brz)(slv)(gld),
+      label={[font=\scriptsize]below:Databricks -- Unity Catalog / Delta Lake -- \textit{Job} com 3 tarefas}] {};
+\end{tikzpicture}
+\caption{Arquitetura \textit{medallion} do pipeline implementado.}\label{fig:pipeline}
+\end{figure}
+
+\subsection{Modelagem dimensional e catálogo de dados}
+Adotou-se um esquema estrela \citep{kimball2013} com a tabela \texttt{fato\_reserva}, cujo grão é \textit{uma reserva} (Figura~\ref{fig:estrela}). Como a origem é um arquivo único e desnormalizado, as dimensões foram derivadas por projeção dos atributos distintos e receberam chaves substitutas (\textit{surrogate keys}). A dimensão de canal reúne segmento, canal de distribuição, tipo de depósito e agente, pois esses atributos são analisados em conjunto em \Q{3}. O catálogo completo, com tipo, descrição, domínio, obrigatoriedade e linhagem de cada atributo, está no diretório \texttt{/catalogo} do repositório; a Tabela~\ref{tab:catalogo} apresenta as medidas da tabela fato.
+
+\begin{figure}[!htb]
+\centering
+\begin{tikzpicture}[
+  ent/.style={draw, rectangle split, rectangle split parts=2, font=\scriptsize, align=left, text width=3.1cm, rounded corners=1pt},
+  lnk/.style={thick, gray!70!black}]
+\node[ent, fill=yellow!20, text width=3.6cm] (f) {\textbf{fato\_reserva}\nodepart{two}
+  id\_reserva\\ sk\_hotel, sk\_data\_chegada\\ sk\_canal, sk\_perfil\_cliente\\ flag\_cancelada, lead\_time\\ adr, noites\_total, hospedes\\ receita\_potencial, alteracoes\\ dias\_cancel\_chegada};
+\node[ent, fill=blue!8, left=1.3cm of f, yshift=0.9cm]  (h) {\textbf{dim\_hotel}\nodepart{two} sk\_hotel, tipo\_hotel};
+\node[ent, fill=blue!8, left=1.3cm of f, yshift=-0.9cm] (t) {\textbf{dim\_tempo}\nodepart{two} sk\_data, data, ano, mes\\ semana, temporada};
+\node[ent, fill=blue!8, right=1.3cm of f, yshift=0.9cm]  (c) {\textbf{dim\_canal}\nodepart{two} sk\_canal, segmento\\ canal\_distrib, tipo\_deposito, agente};
+\node[ent, fill=blue!8, right=1.3cm of f, yshift=-0.9cm] (p) {\textbf{dim\_perfil\_cliente}\nodepart{two} sk\_perfil, pais, tipo\_cliente\\ recorrente, faixa\_cancel\_prev};
+\draw[lnk] (f.west) -- (h.east); \draw[lnk] (f.west) -- (t.east);
+\draw[lnk] (f.east) -- (c.west); \draw[lnk] (f.east) -- (p.west);
+\end{tikzpicture}
+\caption{Esquema estrela da camada Gold.}\label{fig:estrela}
+\end{figure}
+
+\begin{table}[!htb]
+\centering\footnotesize
+\caption{Extrato do catálogo de dados: medidas da tabela \texttt{fato\_reserva}.}\label{tab:catalogo}
+\begin{tabularx}{\textwidth}{@{}l l X l >{\raggedright\arraybackslash}p{4.9cm}@{}}
+\toprule
+\textbf{Atributo} & \textbf{Tipo} & \textbf{Descrição} & \textbf{Domínio} & \textbf{Linhagem} \\
+\midrule
+\texttt{flag\_cancelada} & booleano & Reserva cancelada pelo cliente & \{0, 1\} & \texttt{is\_canceled} \\
+\texttt{lead\_time} & inteiro & Dias entre a reserva e a chegada prevista & 0 a 737 & \texttt{lead\_time} \\
+\texttt{adr} & decimal & Diária média da reserva (EUR) & 0 a 510 & \texttt{adr}, após tratamento de anomalias \\
+\texttt{noites\_total} & inteiro & Total de noites reservadas & 0 a 69 & \texttt{stays\_in\_weekend\_nights} $+$ \texttt{stays\_in\_week\_nights} \\
+\texttt{hospedes} & inteiro & Adultos, crianças e bebês & 1 a 55 & \texttt{adults} $+$ \texttt{children} $+$ \texttt{babies} \\
+\texttt{receita\_potencial} & decimal & Receita da reserva se concretizada (EUR) & $\geq 0$ & \texttt{adr} $\times$ \texttt{noites\_total} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Transformação e carga}
+As regras de negócio aplicadas na passagem Bronze $\rightarrow$ Silver $\rightarrow$ Gold foram: (i) composição da data de chegada a partir de ano, mês (convertido de nome para número) e dia; (ii) conversão dos textos \texttt{"NULL"} de \texttt{agent} e \texttt{country} em nulos reais, rotulados como \texttt{sem\_agente} e \texttt{desconhecido} nas dimensões; (iii) preenchimento com zero dos poucos nulos de \texttt{children}; (iv) exclusão, com registro em tabela de rejeitados, de reservas sem hóspedes e de diárias negativas ou implausíveis; (v) padronização de \texttt{meal}, unificando \texttt{Undefined} e \texttt{SC} (sem refeição), conforme a documentação original; (vi) cálculo de \texttt{receita\_potencial}, aplicável apenas a reservas com ao menos uma noite; (vii) derivação da faixa de cancelamentos anteriores (0, 1, 2 ou mais); e (viii) cálculo de \texttt{dias\_cancel\_chegada}, diferença entre a data de chegada e \texttt{reservation\_status\_date}, que nas reservas canceladas registra a data do cancelamento. Linhas idênticas não foram removidas, pois a base não traz identificador de reserva e reservas de grupo legítimas podem coincidir em todos os atributos; foi criado o identificador sequencial \texttt{id\_reserva}. A carga é feita em modo \textit{overwrite} idempotente, de forma que a reexecução do \textit{Job} reproduz o mesmo estado.
+
+\subsection{Análise}
+A análise de qualidade examinou cada atributo nas dimensões de \citet{batini2006}. As perguntas de negócio foram respondidas por consultas SQL sobre a camada Gold. Para \Q{2}, a associação entre antecedência e cancelamento foi verificada pelo teste qui-quadrado entre faixas de \textit{lead time} e status ($\alpha = 0{,}05$). Em \Q{3} e \Q{5}, consideraram-se apenas grupos com ao menos 200 reservas, para evitar taxas instáveis.
+
+% =====================================================================
+\section{Resultados e discussão}\label{sec:resultados}
+
+\subsection{Qualidade dos dados}\label{sec:qualidade}
+A Tabela~\ref{tab:qualidade} resume os problemas encontrados e o tratamento adotado. Os atributos não listados apresentaram completude integral e valores dentro do domínio declarado. A verificação de consistência entre \texttt{is\_canceled} e \texttt{reservation\_status} confirmou que toda reserva marcada como cancelada tem status \texttt{Canceled} ou \texttt{No-Show}; por isso, \texttt{reservation\_status} não foi usado como atributo explicativo, já que é registrado após o desfecho e não está disponível no momento da reserva.
+
+\begin{table}[!htb]
+\centering\footnotesize
+\caption{Principais problemas de qualidade identificados e tratamento.}\label{tab:qualidade}
+\begin{tabularx}{\textwidth}{@{}l l X X@{}}
+\toprule
+\textbf{Dimensão} & \textbf{Atributo} & \textbf{Problema observado} & \textbf{Tratamento} \\
+\midrule
+Completude & \texttt{company} & 94,3\% de valores \texttt{"NULL"} & Atributo descartado \\
+Completude & \texttt{agent} & 13,7\% de valores \texttt{"NULL"} & Rótulo \texttt{sem\_agente} \\
+Completude & \texttt{country} & 488 valores \texttt{"NULL"} (0,4\%) & Rótulo \texttt{desconhecido} \\
+Completude & \texttt{children} & 4 nulos & Preenchido com zero \\
+Acurácia & \texttt{adults}, \texttt{children}, \texttt{babies} & 180 reservas com zero hóspedes & Excluídas (rejeitados) \\
+Acurácia & \texttt{adr} & 1 valor negativo e 1 acima de 1.000 EUR & Excluídos (rejeitados) \\
+Conformidade & \texttt{meal} & Categorias \texttt{Undefined} e \texttt{SC} equivalentes & Unificadas \\
+Unicidade & todas & 31.994 linhas idênticas; sem chave natural & Mantidas; criado \texttt{id\_reserva} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Após os tratamentos, 182 registros (0,15\%) foram enviados à tabela de rejeitados e a tabela fato ficou com 119.208 reservas, o mesmo número da camada Silver, sem perdas nas junções. A decisão de manter linhas idênticas é a mais sensível do trabalho: removê-las reduziria a base e alteraria as taxas de cancelamento de alguns segmentos, o que é discutido na autoavaliação.
+
+\subsection{Respostas às perguntas de negócio}
+
+\textbf{Q1 -- Taxa de cancelamento.} O hotel urbano cancelou 41,8\% das reservas, contra 27,8\% do resort. No resort, a taxa acompanha a sazonalidade: vai de 14,8\% em janeiro a 31--33\% entre junho e setembro. No hotel urbano, a taxa é alta o ano todo, entre 37,1\% e 46,3\%, com pico de abril a junho. A diferença de nível e de padrão sazonal entre os hotéis indica que uma política única de \textit{overbooking} para a rede seria inadequada.
+
+\textbf{Q2 -- Antecedência.} A Tabela~\ref{tab:q2} mostra que a taxa de cancelamento cresce com a antecedência, passando de 9,6\% nas reservas feitas com até 7 dias para 57,0\% nas feitas com mais de 180 dias ($\chi^2 = 11.914{,}3$; 4 graus de liberdade; $p < 0{,}001$). Reservas antecipadas ficam expostas por mais tempo a mudanças de planos e à busca por tarifas melhores, o que é coerente com a literatura de gestão de receitas \citep{talluri2004}.
+
+\begin{table}[!htb]
+\centering\small
+\caption{Taxa de cancelamento por faixa de antecedência (\Q{2}).}\label{tab:q2}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+\textbf{Antecedência da reserva} & \textbf{Reservas} & \textbf{Taxa de cancelamento} & \textbf{Diária média (EUR)} \\
+\midrule
+0 a 7 dias & 19.635 & 9,6\% & 90,5 \\
+8 a 30 dias & 18.945 & 27,9\% & 108,2 \\
+31 a 90 dias & 29.528 & 37,7\% & 106,4 \\
+91 a 180 dias & 26.420 & 44,7\% & 109,2 \\
+Acima de 180 dias & 24.680 & 57,0\% & 93,0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Q3 -- Segmento e depósito.} O resultado mais marcante contraria a intuição (Tabela~\ref{tab:q3}): as reservas com depósito não reembolsável apresentaram taxas de cancelamento próximas de 100\% (99,9\% em operadoras \textit{offline} e 99,3\% em grupos), contra no máximo 36,7\% nas combinações sem depósito. Essas reservas são feitas com grande antecedência (189 a 232 dias, em média), o que sugere bloqueios de quartos por operadoras e grupos, posteriormente liberados, e não decisões de hóspedes individuais. Uma explicação alternativa é que o campo registre a política contratada, e não a cobrança efetiva do depósito. Em qualquer caso, o achado exige validação com o hotel antes de fundamentar decisões. Entre as reservas sem depósito, o maior risco está no segmento \textit{Online TA} (36,7\%), que é também o maior em volume.
+
+\begin{table}[!htb]
+\centering\small
+\caption{Combinações de segmento e depósito com maior taxa de cancelamento (mín. 200 reservas) (\Q{3}).}\label{tab:q3}
+\begin{tabular}{@{}llrrr@{}}
+\toprule
+\textbf{Segmento} & \textbf{Depósito} & \textbf{Reservas} & \textbf{Taxa de cancel.} & \textbf{Antecedência média} \\
+\midrule
+Offline TA/TO & Non Refund & 5.005 & 99,9\% & 189 \\
+Groups & Non Refund & 9.172 & 99,3\% & 232 \\
+Corporate & Non Refund & 334 & 93,4\% & 69 \\
+Online TA & No Deposit & 56.334 & 36,7\% & 83 \\
+Groups & No Deposit & 10.488 & 28,3\% & 148 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\textbf{Q4 -- Receita em risco.} As reservas canceladas somaram receita potencial de 16,72 milhões de euros no período, 65\% dela no hotel urbano (10,88 milhões) e 35\% no resort (5,84 milhões). No resort, a perda concentra-se no verão: julho e agosto de 2017 responderam, juntos, por 1,52 milhão de euros. Do total cancelado, 10,7\% da receita potencial foi cancelada a menos de sete dias da chegada, quando a chance de revenda é baixa; essa parcela foi de 12,4\% no hotel urbano e de 7,3\% no resort. Como a base não informa se o quarto foi revendido, a receita potencial é um limite superior da perda efetiva.
+
+\textbf{Q5 -- Histórico do cliente.} Clientes recorrentes cancelaram 14,7\% das reservas, contra 37,8\% dos novos. Clientes com exatamente um cancelamento anterior cancelaram 94,4\% das reservas (6.048 casos), mas a taxa cai para 52,9\% entre os que têm dois ou mais (431 casos). A relação não é monotônica, o que sugere que parte desses registros também corresponde a reservas de grupos e operadoras, e não a hóspedes individuais. O histórico é um sinal útil, mas cobre uma parcela pequena da base: apenas 3,1\% das reservas são de recorrentes.
+
+\subsection{Discussão geral}
+Em conjunto, as respostas sustentam a hipótese do MVP: o cancelamento não se distribui ao acaso, mas varia de forma sistemática com o hotel (\Q{1}), a antecedência (\Q{2}), o segmento (\Q{3}) e o histórico do cliente (\Q{5}). Para o gestor, a decisão sugerida é substituir a margem uniforme de \textit{overbooking} por margens por segmento e faixa de antecedência, iguais à taxa histórica de cancelamento de cada célula, e investigar, com a equipe comercial, as reservas não reembolsáveis de operadoras e grupos, que concentram cancelamentos quase totais. Quanto à viabilidade financeira, o pipeline processou todo o volume no nível gratuito, com execução do \textit{Job} em 1 minuto e 33 segundos; em operação contínua, o custo seria dominado por um \textit{cluster} pequeno agendado diariamente. As associações observadas são descritivas e não causais, e os dois hotéis não representam o mercado hoteleiro em geral.
+
+% =====================================================================
+\section{Conclusão e autoavaliação}\label{sec:conclusao}
+
+Este trabalho desenvolveu um MVP de Sistema de Suporte à Decisão para gestão de cancelamentos na hotelaria, com pipeline completo na plataforma Databricks, modelo dimensional em esquema estrela, catálogo de dados com domínios e linhagem e análise de qualidade por atributo. A viabilidade técnica foi demonstrada pelo pipeline executável ponta a ponta; a financeira, pelo custo nulo no nível gratuito; e a desejabilidade, pelas respostas que apontam decisões concretas de \textit{overbooking} e depósito.
+
+\textbf{Autoavaliação.} As perguntas \Q{1}, \Q{2}, \Q{3} e \Q{5} foram respondidas. A \Q{4} foi respondida em parte, pois a base não indica se os quartos cancelados foram revendidos, impedindo medir a perda efetiva. As principais limitações são o período curto (2015--2017), a restrição a dois hotéis de um único país e a ausência de chave natural de reserva. Se recomeçasse o trabalho, investigaria com mais cuidado as linhas idênticas, comparando os resultados com e sem deduplicação, e incluiria desde o início uma dimensão de data de cancelamento. Para transformar o MVP em solução de uso contínuo, seriam necessários: ingestão incremental integrada ao sistema de reservas, testes automatizados de qualidade a cada carga, um modelo preditivo de probabilidade de cancelamento por reserva e um painel para a equipe de gestão de receitas.
+
+% =====================================================================
+\footnotesize
+% Referências no formato ABNT (NBR 6023). Arquivo único: não requer .bib.
+\renewcommand{\bibsection}{\section*{Referências}}
+\setlength{\bibsep}{2pt}
+\begin{thebibliography}{99}
+
+\bibitem[Antonio et al.(2017)]{antonio2017}
+ANTONIO, N.; ALMEIDA, A.; NUNES, L. Predicting hotel booking cancellations to decrease uncertainty and increase revenue. \textbf{Tourism \& Management Studies}, v. 13, n. 2, p. 25--39, 2017.
+
+\bibitem[Antonio et al.(2019)]{antonio2019}
+ANTONIO, N.; ALMEIDA, A.; NUNES, L. Hotel booking demand datasets. \textbf{Data in Brief}, v. 22, p. 41--49, 2019.
+
+\bibitem[Armbrust et al.(2020)]{armbrust2020}
+ARMBRUST, M. et al. Delta Lake: high-performance ACID table storage over cloud object stores. \textbf{Proceedings of the VLDB Endowment}, v. 13, n. 12, p. 3411--3424, 2020.
+
+\bibitem[Armbrust et al.(2021)]{armbrust2021}
+ARMBRUST, M.; GHODSI, A.; XIN, R.; ZAHARIA, M. Lakehouse: a new generation of open platforms that unify data warehousing and advanced analytics. In: CONFERENCE ON INNOVATIVE DATA SYSTEMS RESEARCH (CIDR), 11., 2021. \textbf{Proceedings} [...]. 2021.
+
+\bibitem[Batini e Scannapieco(2006)]{batini2006}
+BATINI, C.; SCANNAPIECO, M. \textbf{Data quality}: concepts, methodologies and techniques. Berlin: Springer, 2006.
+
+\bibitem[Brasil(2018)]{lgpd2018}
+BRASIL. Lei n.º 13.709, de 14 de agosto de 2018. Lei Geral de Proteção de Dados Pessoais (LGPD). \textbf{Diário Oficial da União}, Brasília, DF, 15 ago. 2018.
+
+\bibitem[Inmon(2005)]{inmon2005}
+INMON, W. H. \textbf{Building the data warehouse}. 4. ed. Indianapolis: Wiley, 2005.
+
+\bibitem[Kimball e Ross(2013)]{kimball2013}
+KIMBALL, R.; ROSS, M. \textbf{The data warehouse toolkit}: the definitive guide to dimensional modeling. 3. ed. Indianapolis: Wiley, 2013.
+
+\bibitem[Kimes(1989)]{kimes1989}
+KIMES, S. E. Yield management: a tool for capacity-constrained service firms. \textbf{Journal of Operations Management}, v. 8, n. 4, p. 348--363, 1989.
+
+\bibitem[Mostipak(2020)]{mostipak2020}
+MOSTIPAK, J. \textbf{Hotel booking demand}. Kaggle, 2020. Disponível em: \url{https://www.kaggle.com/datasets/jessemostipak/hotel-booking-demand}. Acesso em: 9 nov. 2026.
+
+\bibitem[Power(2002)]{power2002}
+POWER, D. J. \textbf{Decision support systems}: concepts and resources for managers. Westport: Quorum Books, 2002.
+
+\bibitem[Ries(2011)]{ries2011}
+RIES, E. \textbf{The lean startup}: how today's entrepreneurs use continuous innovation to create radically successful businesses. New York: Crown Business, 2011.
+
+\bibitem[Shim et al.(2002)]{shim2002}
+SHIM, J. P. et al. Past, present, and future of decision support technology. \textbf{Decision Support Systems}, v. 33, n. 2, p. 111--126, 2002.
+
+\bibitem[Sprague(1980)]{sprague1980}
+SPRAGUE, R. H. A framework for the development of decision support systems. \textbf{MIS Quarterly}, v. 4, n. 4, p. 1--26, 1980.
+
+\bibitem[Talluri e van Ryzin(2004)]{talluri2004}
+TALLURI, K. T.; VAN RYZIN, G. J. \textbf{The theory and practice of revenue management}. New York: Springer, 2004.
+
+\bibitem[Wang e Strong(1996)]{wang1996}
+WANG, R. Y.; STRONG, D. M. Beyond accuracy: what data quality means to data consumers. \textbf{Journal of Management Information Systems}, v. 12, n. 4, p. 5--33, 1996.
+
+\bibitem[Zaharia et al.(2016)]{zaharia2016}
+ZAHARIA, M. et al. Apache Spark: a unified engine for big data processing. \textbf{Communications of the ACM}, v. 59, n. 11, p. 56--65, 2016.
+
+\end{thebibliography}
+
+\end{document}
